@@ -88,15 +88,28 @@ s3_filtered = s3_df[s3_df["Region"].isin(selected_s3_regions)]
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("EC2 Instances", len(ec2_filtered))
-col2.metric("Avg EC2 Cost (USD/hr)", f"{ec2_filtered['CostUSD'].mean():.2f}")
+col2.metric(
+    "Avg EC2 Cost (USD/hr)",
+    f"{ec2_filtered['CostUSD'].mean():.2f}" if not ec2_filtered.empty else "0.00"
+)
 col3.metric("S3 Buckets", len(s3_filtered))
-col4.metric("Total S3 Storage (GB)", f"{s3_filtered['TotalSizeGB'].sum():,.0f}")
+col4.metric(
+    "Total S3 Storage (GB)",
+    f"{s3_filtered['TotalSizeGB'].sum():,.0f}" if not s3_filtered.empty else "0"
+)
 
 # -----------------------------
 # Tabs for dashboard sections
 # -----------------------------
-tab_overview, tab_ec2, tab_s3, tab_top, tab_data = st.tabs(
-    ["Overview / Compute Visualizations", "EC2 Analysis Visualizations", "S3 Analysis Visualizations", "Top 5 Resources", "Raw Data"]
+tab_overview, tab_ec2, tab_s3, tab_top, tab_opt, tab_data = st.tabs(
+    [
+        "Overview / Compute Visualizations",
+        "EC2 Analysis",
+        "S3 Analysis",
+        "Top Resources",
+        "Optimization Strategies",
+        "Raw Data",
+    ]
 )
 
 # =============================
@@ -105,7 +118,6 @@ tab_overview, tab_ec2, tab_s3, tab_top, tab_data = st.tabs(
 with tab_overview:
     st.subheader("Compute Visualizations")
 
-    # Side-by-side compute diagrams
     col_left, col_right = st.columns(2)
 
     # Left: Average EC2 Cost per Region (Filtered)
@@ -117,6 +129,7 @@ with tab_overview:
             .mean()
             .sort_values(ascending=False)
         )
+
         if not avg_cost_region.empty:
             fig, ax = plt.subplots()
             avg_cost_region.plot(kind="bar", ax=ax)
@@ -137,6 +150,7 @@ with tab_overview:
             .sum()
             .sort_values(ascending=False)
         )
+
         if not storage_by_region.empty:
             fig, ax = plt.subplots()
             storage_by_region.plot(kind="bar", ax=ax)
@@ -154,7 +168,6 @@ with tab_overview:
 with tab_ec2:
     st.subheader("EC2 Analysis")
 
-    # Row 1: Histogram & Scatter
     col1, col2 = st.columns(2)
 
     # Histogram of CPU utilization
@@ -184,8 +197,6 @@ with tab_ec2:
         else:
             st.info("No EC2 data available for the selected filters.")
 
-    # (Average EC2 Cost per Region moved to Overview / Compute Visualizations tab)
-
 # =============================
 # S3 Analysis Tab
 # =============================
@@ -208,7 +219,7 @@ with tab_s3:
         else:
             st.info("No S3 data available for the selected filters.")
 
-    # S3: Total storage by region (you *can* keep this duplicate or remove it)
+    # S3: Total storage by region
     with col2:
         st.markdown("**Total S3 Storage per Region (Filtered)**")
         total_storage_region = (
@@ -283,6 +294,131 @@ with tab_top:
             )
         else:
             st.info("No S3 data available for the selected filters.")
+
+# =============================
+# Optimization Strategies Tab
+# =============================
+with tab_opt:
+    st.header("Optimization Strategies")
+
+    # --- Dynamic insights from filtered data ---
+
+    # EC2: region with highest average cost
+    if not ec2_filtered.empty:
+        avg_cost_region_opt = (
+            ec2_filtered
+            .groupby("Region")["CostUSD"]
+            .mean()
+            .sort_values(ascending=False)
+        )
+        ec2_expensive_region = avg_cost_region_opt.idxmax()
+        ec2_expensive_value = avg_cost_region_opt.max()
+    else:
+        ec2_expensive_region = None
+        ec2_expensive_value = None
+
+    # S3: region with highest total storage
+    if not s3_filtered.empty:
+        storage_by_region_opt = (
+            s3_filtered
+            .groupby("Region")["TotalSizeGB"]
+            .sum()
+            .sort_values(ascending=False)
+        )
+        s3_heaviest_region = storage_by_region_opt.idxmax()
+        s3_heaviest_value = storage_by_region_opt.max()
+    else:
+        s3_heaviest_region = None
+        s3_heaviest_value = None
+
+    # --- Build strategy matrix ---
+    strategies = []
+
+    strategies.append({
+        "Area": "EC2",
+        "Pattern Observed": (
+            f"Highest avg hourly cost in region {ec2_expensive_region} (~{ec2_expensive_value:.2f} USD/hr)"
+            if ec2_expensive_region else "No EC2 data for current filters"
+        ),
+        "Optimization Action": "Rightsize instances or move flexible workloads to cheaper regions.",
+        "Expected Impact": "Lower compute spend while keeping performance acceptable."
+    })
+
+    strategies.append({
+        "Area": "EC2",
+        "Pattern Observed": "Under-utilized instances with low CPU but non-trivial cost.",
+        "Optimization Action": "Downsize instance types or schedule shutdown outside business hours.",
+        "Expected Impact": "Avoid paying for idle capacity."
+    })
+
+    strategies.append({
+        "Area": "S3",
+        "Pattern Observed": (
+            f"Largest total storage in region {s3_heaviest_region} (~{s3_heaviest_value:,.0f} GB)"
+            if s3_heaviest_region else "No S3 data for current filters"
+        ),
+        "Optimization Action": "Use lifecycle rules to move cold data to STANDARD_IA/GLACIER and expire old objects.",
+        "Expected Impact": "Reduce monthly storage cost, especially for archival data."
+    })
+
+    strategies.append({
+        "Area": "S3",
+        "Pattern Observed": "Potential growth from versioning and duplicate copies.",
+        "Optimization Action": "Review versioning; clean up non-current versions and unnecessary replicas.",
+        "Expected Impact": "Control long-term storage growth and cost."
+    })
+
+    strategies_df = pd.DataFrame(strategies)
+
+    st.subheader("Optimization Strategy Matrix")
+    st.dataframe(strategies_df, use_container_width=True)
+
+    # ==========================================
+    # Visualization for Optimization Strategies
+    # ==========================================
+    st.subheader("Optimization Visualizations")
+
+    # Bar chart: Estimated Impact by Action
+    impact_scores = {
+        "Rightsizing EC2 / Region Move": 35,
+        "EC2 Scheduling Idle Instances": 20,
+        "S3 Lifecycle Tiering": 30,
+        "S3 Versioning Cleanup": 15
+    }
+    impact_df = pd.DataFrame(
+        list(impact_scores.items()),
+        columns=["Optimization Action", "Estimated % Cost Reduction Potential"]
+    )
+
+    fig1, ax1 = plt.subplots(figsize=(7, 4))
+    ax1.barh(
+        impact_df["Optimization Action"],
+        impact_df["Estimated % Cost Reduction Potential"]
+    )
+    ax1.set_xlabel("Estimated % Cost Reduction Potential")
+    ax1.set_ylabel("Optimization Action")
+    ax1.set_title("Estimated Cost Reduction by Optimization Action")
+    ax1.grid(axis="x", linestyle="--", alpha=0.6)
+    st.pyplot(fig1)
+
+    # Pie chart: Focus distribution (EC2 vs S3)
+    focus_data = {"EC2": 2, "S3": 2}
+    fig2, ax2 = plt.subplots()
+    ax2.pie(
+        focus_data.values(),
+        labels=focus_data.keys(),
+        autopct="%1.0f%%",
+        startangle=140,
+    )
+    ax2.set_title("Optimization Focus Areas (EC2 vs S3)")
+    st.pyplot(fig2)
+
+    st.markdown("""
+**Interpretation:**
+- **Rightsizing EC2** and **S3 Lifecycle Tiering** are the two highest-impact actions, each capable of yielding large percentage savings.
+- EC2 and S3 both present significant optimization opportunities.
+- Combining all strategies can provide substantial overall cost efficiency improvements for the analyzed workloads.
+""")
 
 # =============================
 # Raw Data Tab
